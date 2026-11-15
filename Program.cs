@@ -105,7 +105,7 @@ while (cmdSource.GetNextCommand() is { } line && line != "")
 
             var output = root["output"]?.GetValue<string>();
             evaluationOptions.OutputFormat = output == "annotations"
-                ? OutputFormat.Hierarchical
+                ? OutputFormat.List
                 : OutputFormat.Flag;
 
             var tests = testCase["tests"]!.AsArray();
@@ -125,9 +125,40 @@ while (cmdSource.GetNextCommand() is { } line && line != "")
                     if (output == "annotations")
                     {
                         var annotations = new JsonArray();
-                        if (validationResult.IsValid)
+                        if (validationResult.IsValid && validationResult.Details != null)
                         {
-                            CollectAnnotations(validationResult, annotations);
+                            foreach (var node in validationResult.Details)
+                            {
+                                if (node.Annotations == null) continue;
+                                foreach (var (keyword, val) in node.Annotations)
+                                {
+                                    var orig = node.SchemaLocation.OriginalString;
+                                    string akLoc;
+                                    if (orig.EndsWith('/'))
+                                    {
+                                        akLoc = $"{orig}{keyword}";
+                                    }
+                                    else if (orig.EndsWith('#') || orig.Contains('#'))
+                                    {
+                                        akLoc = $"{orig}/{keyword}";
+                                    }
+                                    else
+                                    {
+                                        akLoc = $"{orig}#/{keyword}";
+                                    }
+                                    if (Uri.TryCreate(akLoc, UriKind.Absolute, out var uri))
+                                    {
+                                        akLoc = uri.AbsoluteUri;
+                                    }
+                                    annotations.Add(new JsonObject
+                                    {
+                                        ["keyword"] = keyword,
+                                        ["instanceLocation"] = node.InstanceLocation.ToString(),
+                                        ["absoluteKeywordLocation"] = akLoc,
+                                        ["annotation"] = JsonNode.Parse(val.GetRawText())
+                                    });
+                                }
+                            }
                         }
                         testResult = new JsonObject
                         {
@@ -192,62 +223,6 @@ static string GetLibVersion()
 {
     var attribute = typeof(JsonSchema).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
     return Regex.Match(attribute!.InformationalVersion, @"\d+(\.\d+)+").Value;
-}
-
-static void CollectAnnotations(EvaluationResults node, JsonArray annotations)
-{
-    if (!node.IsValid)
-    {
-        return;
-    }
-
-    if (node.Annotations != null)
-    {
-        foreach (var (keyword, val) in node.Annotations)
-        {
-            var annObj = new JsonObject
-            {
-                ["keyword"] = keyword,
-                ["instanceLocation"] = node.InstanceLocation.ToString(),
-                ["annotation"] = JsonNode.Parse(val.GetRawText())
-            };
-            if (node.SchemaLocation != null)
-            {
-                var orig = node.SchemaLocation.OriginalString;
-                string akLoc;
-                if (orig.EndsWith('/'))
-                {
-                    akLoc = $"{orig}{keyword}";
-                }
-                else if (orig.EndsWith('#') || orig.Contains('#'))
-                {
-                    akLoc = $"{orig}/{keyword}";
-                }
-                else
-                {
-                    akLoc = $"{orig}#/{keyword}";
-                }
-                if (Uri.TryCreate(akLoc, UriKind.Absolute, out var uri))
-                {
-                    akLoc = uri.AbsoluteUri;
-                }
-                annObj["absoluteKeywordLocation"] = akLoc;
-            }
-            else
-            {
-                var kwPtr = node.EvaluationPath.Combine(keyword);
-                annObj["keywordLocation"] = "#" + kwPtr.ToString();
-            }
-            annotations.Add(annObj);
-        }
-    }
-    if (node.Details != null)
-    {
-        foreach (var child in node.Details)
-        {
-            CollectAnnotations(child, annotations);
-        }
-    }
 }
 
 class UnknownCommand : Exception
